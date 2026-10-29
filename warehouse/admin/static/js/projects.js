@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+import { columnVisibilityMenu } from "./tabulator";
 import { linkCell, remoteTable } from "./utils/remote_table";
 
 const element = document.getElementById("projects-table");
@@ -32,6 +33,7 @@ if (element) {
     initialHeaderFilter: initialHeaderFilter,
     columnDefaults: {
       headerSort: false,
+      headerMenu: columnVisibilityMenu,
     },
     columns: columns,
   });
