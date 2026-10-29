@@ -22,9 +22,11 @@ def upgrade():
 
     with op.get_context().autocommit_block():
         # env.py sets statement_timeout = 5000; a GIN trigram build over ~1M
-        # rows, each first passed through ultranormalize_name(), needs more
-        # headroom or it is cancelled, leaving an INVALID index.
-        op.execute(sa.text("SET statement_timeout = 120000"))  # 120s
+        # rows needs more headroom or it is cancelled, leaving an INVALID
+        # index that blocks the retry. Normalizing every name alone measured
+        # ~2s in production, and the build on top of that is unmeasured, so
+        # this is more generous than the username index's 120s.
+        op.execute(sa.text("SET statement_timeout = 300000"))  # 300s
         op.execute(sa.text("SET lock_timeout = 5000"))  # 5s
 
         # Raw SQL: op.create_index() attaches an operator class by the
