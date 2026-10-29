@@ -11,7 +11,11 @@ if (element) {
       field: "name",
       formatter: linkCell("detail_link"),
       headerFilter: "input",
-      headerFilterPlaceholder: "name fragment or uuid",
+      headerFilterPlaceholder: "name fragment or uuid, then Enter",
+      // Applied on Enter, unlike the users and organizations tables: a one
+      // or two character fragment cannot use the trigram index and scans
+      // close to a million names, about two seconds per pause while typing.
+      headerFilterLiveFilter: false,
       headerSort: true,
     },
     {
