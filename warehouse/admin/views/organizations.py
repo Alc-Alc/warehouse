@@ -97,7 +97,7 @@ def _organization_activity(request, organization):
 
 class OrganizationRoleForm(wtforms.Form):
     role_name = wtforms.SelectField(
-        choices=[(role.value, role.value) for role in OrganizationRoleType],
+        choices=[wtforms.SelectChoice(role.value) for role in OrganizationRoleType],
         coerce=OrganizationRoleType,
         validators=[
             wtforms.validators.InputRequired(message="Select a role"),
@@ -112,7 +112,7 @@ class AddOrganizationRoleForm(wtforms.Form):
         ]
     )
     role_name = wtforms.SelectField(
-        choices=[(role.value, role.value) for role in OrganizationRoleType],
+        choices=[wtforms.SelectChoice(role.value) for role in OrganizationRoleType],
         coerce=OrganizationRoleType,
         validators=[
             wtforms.validators.InputRequired(message="Select a role"),
@@ -160,7 +160,7 @@ class OrganizationForm(wtforms.Form):
     )
 
     orgtype = wtforms.SelectField(
-        choices=[(orgtype.value, orgtype.value) for orgtype in OrganizationType],
+        choices=[wtforms.SelectChoice(orgtype.value) for orgtype in OrganizationType],
         coerce=OrganizationType,
         validators=[
             wtforms.validators.InputRequired(message="Select organization type"),
@@ -1920,7 +1920,9 @@ def set_project_create_ratelimit(request):
 
 class OrganizationOIDCIssuerForm(wtforms.Form):
     issuer_type = wtforms.SelectField(
-        choices=[(issuer.value, issuer.name) for issuer in OIDCIssuerType],
+        choices=[
+            wtforms.SelectChoice(issuer.value, issuer.name) for issuer in OIDCIssuerType
+        ],
         coerce=OIDCIssuerType,
         validators=[
             wtforms.validators.InputRequired(message="Select an issuer type"),
