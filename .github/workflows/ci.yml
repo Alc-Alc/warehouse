@@ -14,28 +14,39 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    if: github.repository == 'pypi/warehouse'
-    runs-on: depot-ubuntu-24.04-arm
-    outputs:
-      buildId: ${{ steps.build.outputs.build-id}}
+    if: github.repository == 'Alc-Alc/warehouse'
+    runs-on: ubuntu-24.04
     permissions:
-      id-token: write
+      contents: read
+      packages: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up Depot CLI
-        uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
-      - name: Build image
-        id: build
-        uses: depot/build-push-action@98e78adca7817480b8185f474a400b451d74e287 # v1.18.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          save: true
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          # A single manifest, so deleting the tag leaves no untagged
+          # attestation manifests behind in GHCR.
+          provenance: false
+          sbom: false
+          # Reuse layers from earlier runs via the Actions cache.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
             DEVEL=yes
             CI=yes
-          tags: pypi/warehouse:ci-${{ github.run_id }}
+          tags: ghcr.io/alc-alc/warehouse:ci-${{ github.run_id }}
   test:
     # Time out if our test suite has gotten hung
     timeout-minutes: 15
@@ -45,10 +56,10 @@ jobs:
         include:
           - name: Tests
             command: bin/tests --postgresql-host postgres
-            runs_on: depot-ubuntu-24.04-arm-4
+            runs_on: ubuntu-24.04
           - name: Lint
             command: bin/lint
-            runs_on: depot-ubuntu-24.04-arm-4
+            runs_on: ubuntu-24.04
           - name: User Documentation
             command: bin/user-docs
           - name: Developer Documentation
@@ -57,15 +68,19 @@ jobs:
             command: bin/deps
           - name: Licenses
             command: bin/licenses
-    runs-on: ${{ (matrix.runs_on != null) && matrix.runs_on || 'depot-ubuntu-24.04-arm' }}
+    runs-on: ${{ (matrix.runs_on != null) && matrix.runs_on || 'ubuntu-24.04' }}
     container:
-      image: registry.depot.dev/rltf7cln5v:${{ needs.build.outputs.buildId }}
+      image: ghcr.io/alc-alc/warehouse:ci-${{ github.run_id }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       env:
         BILLING_BACKEND: warehouse.subscriptions.services.MockStripeBillingService api_base=http://stripe:12111 api_version=2020-08-27
         # Put tombi's schema cache somewhere actions/cache can reach it.
         TOMBI_CACHE_HOME: .cache/tombi
     permissions:
-      id-token: write
+      contents: read
+      packages: read
     services:
       postgres:
         image: ${{ (matrix.name == 'Tests') && 'postgres:17.11' || '' }}
@@ -119,12 +134,16 @@ jobs:
   check_db:
     name: Check Database Consistency
     needs: build
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     continue-on-error: true
     container:
-      image: registry.depot.dev/rltf7cln5v:${{ needs.build.outputs.buildId }}
+      image: ghcr.io/alc-alc/warehouse:ci-${{ github.run_id }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
-      id-token: write
+      contents: read
+      packages: read
     services:
       postgres:
         image: postgres:17.11
@@ -160,12 +179,15 @@ jobs:
   extract_translations:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     container:
-      image: registry.depot.dev/rltf7cln5v:${{ needs.build.outputs.buildId }}
+      image: ghcr.io/alc-alc/warehouse:ci-${{ github.run_id }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
-      id-token: write
+      packages: read
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -269,3 +291,36 @@ jobs:
           else
             echo "Updated PR #$open_pr"
           fi
+
+  cleanup:
+    name: Delete CI image
+    needs: [build, test, check_db, extract_translations]
+    # always() also runs this when the workflow is cancelled, e.g. by
+    # cancel-in-progress, so superseded runs don't leak images either.
+    if: always() && needs.build.result != 'skipped'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Delete ci-${{ github.run_id }} from GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE: /users/${{ github.repository_owner }}/packages/container/warehouse
+          TAG: ci-${{ github.run_id }}
+        run: |
+          versions=$(gh api --paginate "$PACKAGE/versions" \
+            --jq '.[] | "\(.id) \(.metadata.container.tags | join(","))"') || {
+            echo "No warehouse package found, nothing to delete"; exit 0; }
+          id=$(echo "$versions" | awk -v tag="$TAG" '$2 ~ "(^|,)" tag "(,|$)" {print $1}')
+          if [ -z "$id" ]; then
+            echo "No version tagged $TAG (build may have failed before pushing)"
+            exit 0
+          fi
+          # GHCR refuses to delete a package's last version; delete the
+          # package itself instead. The next build recreates it.
+          if [ "$(echo "$versions" | wc -l)" -eq 1 ]; then
+            gh api -X DELETE "$PACKAGE"
+          else
+            gh api -X DELETE "$PACKAGE/versions/$id"
+          fi
+          echo "Deleted $TAG"
